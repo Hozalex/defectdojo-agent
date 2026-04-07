@@ -7,7 +7,6 @@ import asyncpg
 
 from db import search_infrastructure
 from dojo import Finding, ScanContext, format_component, service_for_finding
-from utils import redact
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +60,9 @@ def _format_finding(finding: Finding, ctx: ScanContext) -> str:
         f"Engagement: {ctx.engagement_name}",
     ]
     if finding.description:
-        parts.append(f"\nDescription:\n{redact(finding.description)[:800]}")
+        parts.append(f"\nDescription:\n{finding.description[:800]}")
     if finding.mitigation:
-        parts.append(f"\nScanner mitigation hint:\n{redact(finding.mitigation)[:400]}")
+        parts.append(f"\nScanner mitigation hint:\n{finding.mitigation[:400]}")
     return "\n".join(parts)
 
 

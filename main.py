@@ -108,14 +108,15 @@ async def _process(test_id: int, test_url: str) -> None:
         findings.sort(key=lambda f: (0 if f.severity.lower() == "critical" else 1, f.title))
         capped = findings[: s.conf.max_findings]
 
-        use_llm = (
-            s.conf.llm_enabled
-            and ctx.scan_type not in s.conf.ignore_scan_types
-        )
+        use_llm = s.conf.llm_enabled and ctx.scan_type not in s.conf.ignore_scan_types
+        show_desc = ctx.scan_type not in s.conf.hide_desc_scan_types
+
         if not s.conf.llm_enabled:
             logger.info("test=%d: LLM disabled globally", test_id)
         elif ctx.scan_type in s.conf.ignore_scan_types:
             logger.info("test=%d: scan type %r in ignore list — sending without AI analysis", test_id, ctx.scan_type)
+        if not show_desc:
+            logger.info("test=%d: scan type %r — description hidden", test_id, ctx.scan_type)
 
         analyses: list[str | None] = [None] * len(capped)
         total_input = total_output = 0
@@ -156,7 +157,7 @@ async def _process(test_id: int, test_url: str) -> None:
             test_id, total_input, total_output, cost,
         )
 
-        await s.notifier.send(ctx, capped, analyses, total)
+        await s.notifier.send(ctx, capped, analyses, total, show_desc=show_desc)
         logger.info("test=%d: notification sent (%d/%d findings)", test_id, len(capped), total)
 
     except Exception:

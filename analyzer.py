@@ -96,38 +96,45 @@ async def analyze_finding(
         {"role": "user", "content": _format_finding(finding, ctx)},
     ]
 
-    for _ in range(5):  # cap tool-use iterations
-        kwargs: dict = dict(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=system_prompt,
-            messages=messages,
-        )
-        if tools:
-            kwargs["tools"] = tools
+    try:
+        # Max 2 iterations: one tool call + one final answer.
+        # search_infrastructure is only needed once per finding.
+        for _ in range(2):
+            kwargs: dict = dict(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=system_prompt,
+                messages=messages,
+            )
+            if tools:
+                kwargs["tools"] = tools
 
-        resp = await client.messages.create(**kwargs)
+            resp = await client.messages.create(**kwargs)
 
-        if resp.stop_reason == "end_turn":
-            return "".join(b.text for b in resp.content if hasattr(b, "text"))
+            if resp.stop_reason == "end_turn":
+                return "".join(b.text for b in resp.content if hasattr(b, "text"))
 
-        if resp.stop_reason == "tool_use":
-            tool_results = []
-            for block in resp.content:
-                if block.type == "tool_use" and block.name == "search_infrastructure":
-                    svc = block.input.get("service_name", "")
-                    logger.debug("search_infrastructure(%r)", svc)
-                    result = await search_infrastructure(pool, svc)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-            if not tool_results:
+            if resp.stop_reason == "tool_use":
+                tool_results = []
+                for block in resp.content:
+                    if block.type == "tool_use" and block.name == "search_infrastructure":
+                        svc = block.input.get("service_name", "")
+                        logger.debug("search_infrastructure(%r)", svc)
+                        result = await search_infrastructure(pool, svc)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+                if not tool_results:
+                    break
+                messages.append({"role": "assistant", "content": resp.content})
+                messages.append({"role": "user", "content": tool_results})
+            else:
                 break
-            messages.append({"role": "assistant", "content": resp.content})
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            break
 
-    return "".join(b.text for b in resp.content if hasattr(b, "text")) or "Analysis unavailable."
+        return "".join(b.text for b in resp.content if hasattr(b, "text")) or "Analysis unavailable."
+
+    except Exception:
+        logger.exception("Analysis failed for finding %r", finding.title)
+        return "Analysis unavailable."

@@ -96,12 +96,17 @@ async def _process(test_id: int, test_url: str) -> None:
         findings.sort(key=lambda f: (0 if f.severity.lower() == "critical" else 1, f.title))
         capped = findings[: s.conf.max_findings]
 
-        analyses = await asyncio.gather(*[
+        raw = await asyncio.gather(*[
             analyze_finding(s.claude, f, ctx, s.system_prompt, s.pool)
             for f in capped
-        ])
+        ], return_exceptions=True)
 
-        await s.notifier.send(ctx, capped, list(analyses), total)
+        analyses = [
+            r if isinstance(r, str) else "Analysis unavailable."
+            for r in raw
+        ]
+
+        await s.notifier.send(ctx, capped, analyses, total)
         logger.info("test=%d: notification sent (%d/%d findings)", test_id, len(capped), total)
 
     except Exception:

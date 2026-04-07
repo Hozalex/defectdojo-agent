@@ -3,6 +3,7 @@ import logging
 import httpx
 
 from dojo import Finding, ScanContext, format_component, service_for_finding
+from utils import redact
 
 logger = logging.getLogger(__name__)
 
@@ -11,23 +12,48 @@ _SEVERITY_COLOR = {
     "high":     "#E67E22",
 }
 
+_DESC_MAX = 400  # characters shown in Description field
+
 
 def _color(severity: str) -> str:
     return _SEVERITY_COLOR.get(severity.lower(), "#95A5A6")
 
 
-def _attachment_title(finding: Finding) -> str:
-    title = f"[{finding.severity}] {finding.title}"
-    if finding.component_name:
-        ver = f" {finding.component_version}" if finding.component_version else ""
-        title += f" — {finding.component_name}{ver}"
-    return title
+def _format_text(finding: Finding, analysis: str | None) -> str:
+    """Build the attachment body rendered at full text size.
+
+    First line is bold *[Severity] title* — this ensures the severity badge
+    is prominent (the attachment `title` field renders at a smaller size in
+    RocketChat and is used only as a short link to DefectDojo).
+    """
+    lines: list[str] = []
+
+    # Bold header — visible at body text size
+    lines.append(f"*[{finding.severity}] {finding.title}*")
+    lines.append("")
+
+    desc = redact((finding.description or "").strip())
+    if desc:
+        if len(desc) > _DESC_MAX:
+            desc = desc[:_DESC_MAX].rstrip() + "…"
+        lines.append(f"Description: {desc}")
+    else:
+        lines.append("Description: —")
+
+    lines.append("")
+
+    if analysis:
+        lines.append(f"Analysis:\n{analysis.strip()}")
+    else:
+        lines.append("Analysis unavailable.")
+
+    return "\n".join(lines)
 
 
 def _build_slack_payload(
     ctx: ScanContext,
     findings: list[Finding],
-    analyses: list[str],
+    analyses: list[str | None],
     total_count: int,
     dojo_base_url: str,
 ) -> dict:
@@ -44,14 +70,13 @@ def _build_slack_payload(
         comp = format_component(finding)
         if comp:
             fields.append({"title": "Component", "value": comp, "short": True})
-        if finding.cve:
-            fields.append({"title": "CVE", "value": finding.cve, "short": True})
 
         attachments.append({
             "color":      _color(finding.severity),
-            "title":      _attachment_title(finding),
+            "title":      "→ DefectDojo",
             "title_link": f"{dojo_base_url}/finding/{finding.id}",
-            "text":       analysis,
+            "text":       _format_text(finding, analysis),
+            "mrkdwn_in":  ["text"],
             "fields":     fields,
         })
 
@@ -61,7 +86,7 @@ def _build_slack_payload(
 def _build_text_payload(
     ctx: ScanContext,
     findings: list[Finding],
-    analyses: list[str],
+    analyses: list[str | None],
     total_count: int,
 ) -> dict:
     lines = [
@@ -70,11 +95,7 @@ def _build_text_payload(
         "",
     ]
     for finding, analysis in zip(findings, analyses):
-        lines.append(f"[{finding.severity}] {finding.title}")
-        comp = format_component(finding)
-        if comp:
-            lines.append(f"Component: {comp}")
-        lines.append(analysis)
+        lines.append(_format_text(finding, analysis))
         lines.append("")
     return {"text": "\n".join(lines)}
 
@@ -90,7 +111,7 @@ class Notifier:
         self,
         ctx: ScanContext,
         findings: list[Finding],
-        analyses: list[str],
+        analyses: list[str | None],
         total_count: int,
     ) -> None:
         if self._fmt == "slack":

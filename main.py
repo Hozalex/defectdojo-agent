@@ -1,6 +1,5 @@
-import asyncio
 import logging
-import signal
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -17,6 +16,17 @@ from dojo import DojoClient, parse_test_id
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
+
+
+class _HealthFilter(logging.Filter):
+    """Downgrade uvicorn access log records for GET /health to DEBUG."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "GET /health " in msg:
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
 
 
 # ── App state ──────────────────────────────────────────────────────────────────
@@ -43,6 +53,7 @@ async def lifespan(app: FastAPI):
         level=conf.log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logging.getLogger("uvicorn.access").addFilter(_HealthFilter())
     logger.info("Starting vuln-agent")
 
     pool: asyncpg.Pool | None = None
@@ -80,6 +91,7 @@ async def _process(test_id: int, test_url: str) -> None:
     s = _state
     try:
         ctx = await s.dojo.get_scan_context(test_id, test_url)
+
         findings = await s.dojo.get_findings(test_id)
 
         if not findings:
@@ -96,21 +108,47 @@ async def _process(test_id: int, test_url: str) -> None:
         findings.sort(key=lambda f: (0 if f.severity.lower() == "critical" else 1, f.title))
         capped = findings[: s.conf.max_findings]
 
-        raw = await asyncio.gather(*[
-            analyze_finding(s.claude, f, ctx, s.system_prompt, s.pool)
-            for f in capped
-        ], return_exceptions=True)
+        use_llm = (
+            s.conf.llm_enabled
+            and ctx.scan_type not in s.conf.ignore_scan_types
+        )
+        if not s.conf.llm_enabled:
+            logger.info("test=%d: LLM disabled globally", test_id)
+        elif ctx.scan_type in s.conf.ignore_scan_types:
+            logger.info("test=%d: scan type %r in ignore list — sending without AI analysis", test_id, ctx.scan_type)
 
-        analyses: list[str] = []
+        analyses: list[str | None] = [None] * len(capped)
         total_input = total_output = 0
-        for r in raw:
-            if isinstance(r, tuple):
-                text, inp, out = r
-                analyses.append(text)
+        if use_llm:
+            semaphore = asyncio.Semaphore(s.conf.llm_concurrency)
+            infra_cache: dict[str, str] | None = {} if s.pool is not None else None
+            infra_inflight: dict[str, asyncio.Task[str]] | None = {} if s.pool is not None else None
+
+            async def _analyze_one(finding):
+                async with semaphore:
+                    try:
+                        return await analyze_finding(
+                            s.claude,
+                            finding,
+                            ctx,
+                            s.system_prompt,
+                            s.pool,
+                            infra_cache,
+                            infra_inflight,
+                        )
+                    except Exception:
+                        logger.exception("analyze_finding raised for %r", finding.title)
+                        return None, 0, 0
+
+            tasks = [
+                asyncio.create_task(_analyze_one(finding))
+                for finding in capped
+            ]
+            results = await asyncio.gather(*tasks)
+            for i, (text, inp, out) in enumerate(results):
+                analyses[i] = text
                 total_input += inp
                 total_output += out
-            else:
-                analyses.append("Analysis unavailable.")
 
         cost = total_input * _COST_INPUT_PER_TOKEN + total_output * _COST_OUTPUT_PER_TOKEN
         logger.info(
@@ -133,7 +171,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     # DefectDojo may put the test URL in url_ui, url_api, or embedded in description.
     # Try each field in order until test_id is found.
-    raw_body = await request.body() if False else None  # body already consumed above
     candidates = [
         body.get("url_ui", ""),
         body.get("url_api", ""),

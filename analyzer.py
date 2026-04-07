@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import asyncpg
 
 from db import search_infrastructure
 from dojo import Finding, ScanContext, format_component, service_for_finding
+from utils import redact
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,9 @@ def _format_finding(finding: Finding, ctx: ScanContext) -> str:
         f"Engagement: {ctx.engagement_name}",
     ]
     if finding.description:
-        parts.append(f"\nDescription:\n{finding.description[:800]}")
+        parts.append(f"\nDescription:\n{redact(finding.description)[:800]}")
     if finding.mitigation:
-        parts.append(f"\nScanner mitigation hint:\n{finding.mitigation[:400]}")
+        parts.append(f"\nScanner mitigation hint:\n{redact(finding.mitigation)[:400]}")
     return "\n".join(parts)
 
 
@@ -95,8 +97,18 @@ async def analyze_finding(
     ctx: ScanContext,
     system_prompt: str,
     pool: asyncpg.Pool | None,
-) -> tuple[str, int, int]:
-    """Returns (analysis_text, total_input_tokens, total_output_tokens)."""
+    infra_cache: dict[str, str] | None = None,
+    infra_inflight: dict[str, asyncio.Task[str]] | None = None,
+) -> tuple[str | None, int, int]:
+    """Returns (analysis_text_or_None, total_input_tokens, total_output_tokens).
+
+    Returns None (no AI analysis) when the service cannot be resolved — avoids
+    the model asking clarifying questions without useful context.
+    """
+    if service_for_finding(finding) is None:
+        logger.debug("service unknown for finding %r — skipping LLM", finding.title)
+        return None, 0, 0
+
     tools = [_INFRA_TOOL] if pool is not None else []
     messages: list[dict] = [
         {"role": "user", "content": _format_finding(finding, ctx)},
@@ -128,9 +140,31 @@ async def analyze_finding(
                 tool_results = []
                 for block in resp.content:
                     if block.type == "tool_use" and block.name == "search_infrastructure":
-                        svc = block.input.get("service_name", "")
+                        svc = (block.input.get("service_name") or "").strip()
                         logger.debug("search_infrastructure(%r)", svc)
-                        result = await search_infrastructure(pool, svc)
+                        if not svc:
+                            result = "No service_name provided."
+                        elif infra_cache is None:
+                            result = await search_infrastructure(pool, svc)
+                        else:
+                            cache_key = svc.lower()
+                            result = infra_cache.get(cache_key)
+                            if result is None:
+                                if infra_inflight is None:
+                                    result = await search_infrastructure(pool, svc)
+                                else:
+                                    task = infra_inflight.get(cache_key)
+                                    owner = False
+                                    if task is None:
+                                        task = asyncio.create_task(search_infrastructure(pool, svc))
+                                        infra_inflight[cache_key] = task
+                                        owner = True
+                                    try:
+                                        result = await task
+                                    finally:
+                                        if owner:
+                                            infra_inflight.pop(cache_key, None)
+                                infra_cache[cache_key] = result
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -143,9 +177,9 @@ async def analyze_finding(
             else:
                 break
 
-        text = "".join(b.text for b in resp.content if hasattr(b, "text")) or "Analysis unavailable."
+        text = "".join(b.text for b in resp.content if hasattr(b, "text")) or None
         return text, input_tokens, output_tokens
 
     except Exception:
         logger.exception("Analysis failed for finding %r", finding.title)
-        return "Analysis unavailable.", input_tokens, output_tokens
+        return None, input_tokens, output_tokens

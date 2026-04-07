@@ -30,6 +30,8 @@ DefectDojo webhook (scan added)
 | `EXTRA_PROMPT_FILE` | — | Path to a file appended to the system prompt at startup |
 | `NOTIFY_FORMAT` | `slack` | `slack` (attachments) or `text` |
 | `MAX_FINDINGS` | `10` | Maximum findings per notification, Critical first |
+| `LLM_CONCURRENCY` | `4` | Maximum parallel Claude requests per webhook |
+| `IGNORE_SCAN_TYPES` | — | Comma-separated scan type names to skip entirely, e.g. `Gitleaks Scan,DAST Scan` |
 | `LOG_LEVEL` | `INFO` | Log level |
 
 ## Webhook
@@ -52,7 +54,7 @@ For each finding, the service name is resolved in this order:
 
 1. `finding.service` — populated when the scan was imported with a `service` parameter
 2. First path component of `finding.file_path` — e.g. `payment-service/src/Foo.java` → `payment-service`
-3. No service — analysis proceeds without infrastructure context
+3. No service — AI analysis is skipped for this finding (sent as "Analysis unavailable")
 
 ## Infrastructure search (optional)
 

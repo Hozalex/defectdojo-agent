@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         conf=conf,
         dojo=DojoClient(conf.defectdojo_url, conf.defectdojo_api_key),
         claude=anthropic.AsyncAnthropic(api_key=conf.anthropic_api_key),
-        notifier=Notifier(conf.notify_url, conf.notify_format, conf.defectdojo_url),
+        notifier=Notifier(conf.notify_url, conf.notify_format, conf.defectdojo_public_url),
         pool=pool,
         system_prompt=load_system_prompt(conf.extra_prompt_file),
     )

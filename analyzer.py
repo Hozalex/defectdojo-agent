@@ -18,12 +18,7 @@ For each finding:
 3. Provide a clear, actionable remediation recommendation.
 
 If the search_infrastructure tool is available, call it before assessing risk.
-Infrastructure context (public ingress, network isolation, cluster placement) is critical for accurate risk assessment.
-
-Output format (plain text, no markdown):
-Risk: <Critical|High|Medium|Low> — one-sentence justification
-Remediation: one concrete action
-Notes: any relevant context (optional, 1-2 sentences max)\
+Infrastructure context (public ingress, network isolation, cluster placement) is critical for accurate risk assessment.\
 """
 
 

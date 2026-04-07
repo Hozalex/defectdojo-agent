@@ -25,6 +25,7 @@ DefectDojo webhook (scan added)
 
 | Variable | Default | Description |
 |---|---|---|
+| `DEFECTDOJO_PUBLIC_URL` | `DEFECTDOJO_URL` | Public-facing URL used for finding links in notifications. Set when `DEFECTDOJO_URL` is an internal address |
 | `DATABASE_URL` | — | PostgreSQL DSN. Enables `search_infrastructure` tool — Claude can query infra context before assessing risk |
 | `EXTRA_PROMPT_FILE` | — | Path to a file appended to the system prompt at startup |
 | `NOTIFY_FORMAT` | `slack` | `slack` (attachments) or `text` |

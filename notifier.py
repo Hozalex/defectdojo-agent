@@ -12,6 +12,11 @@ _SEVERITY_COLOR = {
     "high":     "#E67E22",
 }
 
+_SEVERITY_EMOJI = {
+    "critical": "🔴",
+    "high":     "🟠",
+}
+
 _DESC_MAX = 400  # characters shown in Description field
 
 
@@ -29,7 +34,8 @@ def _format_text(finding: Finding, analysis: str | None) -> str:
     lines: list[str] = []
 
     # Bold header — visible at body text size
-    lines.append(f"*[{finding.severity}] {finding.title}*")
+    emoji = _SEVERITY_EMOJI.get(finding.severity.lower(), "⚪")
+    lines.append(f"*{emoji} [{finding.severity}] {finding.title}*")
     lines.append("")
 
     desc = redact((finding.description or "").strip())

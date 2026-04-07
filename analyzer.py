@@ -84,17 +84,24 @@ _INFRA_TOOL = {
 }
 
 
+# Haiku pricing (per token). Update if model or pricing changes.
+_COST_INPUT_PER_TOKEN  = 0.80 / 1_000_000   # $0.80 / 1M input tokens
+_COST_OUTPUT_PER_TOKEN = 4.00 / 1_000_000   # $4.00 / 1M output tokens
+
+
 async def analyze_finding(
     client: anthropic.AsyncAnthropic,
     finding: Finding,
     ctx: ScanContext,
     system_prompt: str,
     pool: asyncpg.Pool | None,
-) -> str:
+) -> tuple[str, int, int]:
+    """Returns (analysis_text, total_input_tokens, total_output_tokens)."""
     tools = [_INFRA_TOOL] if pool is not None else []
     messages: list[dict] = [
         {"role": "user", "content": _format_finding(finding, ctx)},
     ]
+    input_tokens = output_tokens = 0
 
     try:
         # Max 2 iterations: one tool call + one final answer.
@@ -110,9 +117,12 @@ async def analyze_finding(
                 kwargs["tools"] = tools
 
             resp = await client.messages.create(**kwargs)
+            input_tokens  += resp.usage.input_tokens
+            output_tokens += resp.usage.output_tokens
 
             if resp.stop_reason == "end_turn":
-                return "".join(b.text for b in resp.content if hasattr(b, "text"))
+                text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+                return text, input_tokens, output_tokens
 
             if resp.stop_reason == "tool_use":
                 tool_results = []
@@ -133,8 +143,9 @@ async def analyze_finding(
             else:
                 break
 
-        return "".join(b.text for b in resp.content if hasattr(b, "text")) or "Analysis unavailable."
+        text = "".join(b.text for b in resp.content if hasattr(b, "text")) or "Analysis unavailable."
+        return text, input_tokens, output_tokens
 
     except Exception:
         logger.exception("Analysis failed for finding %r", finding.title)
-        return "Analysis unavailable."
+        return "Analysis unavailable.", input_tokens, output_tokens

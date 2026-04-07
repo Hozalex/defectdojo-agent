@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 import config as cfg
-from analyzer import analyze_finding, load_system_prompt
+from analyzer import analyze_finding, load_system_prompt, _COST_INPUT_PER_TOKEN, _COST_OUTPUT_PER_TOKEN
 from db import create_pool
 from dojo import DojoClient, parse_test_id
 from notifier import Notifier
@@ -101,10 +101,22 @@ async def _process(test_id: int, test_url: str) -> None:
             for f in capped
         ], return_exceptions=True)
 
-        analyses = [
-            r if isinstance(r, str) else "Analysis unavailable."
-            for r in raw
-        ]
+        analyses: list[str] = []
+        total_input = total_output = 0
+        for r in raw:
+            if isinstance(r, tuple):
+                text, inp, out = r
+                analyses.append(text)
+                total_input += inp
+                total_output += out
+            else:
+                analyses.append("Analysis unavailable.")
+
+        cost = total_input * _COST_INPUT_PER_TOKEN + total_output * _COST_OUTPUT_PER_TOKEN
+        logger.info(
+            "test=%d: tokens input=%d output=%d cost=$%.5f",
+            test_id, total_input, total_output, cost,
+        )
 
         await s.notifier.send(ctx, capped, analyses, total)
         logger.info("test=%d: notification sent (%d/%d findings)", test_id, len(capped), total)

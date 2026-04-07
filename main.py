@@ -113,15 +113,30 @@ async def _process(test_id: int, test_url: str) -> None:
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
-    url_ui = body.get("url_ui", "")
-    test_id = parse_test_id(url_ui)
+
+    # DefectDojo may put the test URL in url_ui, url_api, or embedded in description.
+    # Try each field in order until test_id is found.
+    raw_body = await request.body() if False else None  # body already consumed above
+    candidates = [
+        body.get("url_ui", ""),
+        body.get("url_api", ""),
+        body.get("description", ""),
+    ]
+    test_id: int | None = None
+    test_url: str = ""
+    for candidate in candidates:
+        test_id = parse_test_id(candidate)
+        if test_id:
+            test_url = candidate
+            break
 
     if not test_id:
-        logger.warning("Webhook received but no test_id in url_ui=%r", url_ui)
-        return JSONResponse({"ok": False, "error": "test_id not found"}, status_code=400)
+        # DefectDojo sends a verification ping when the webhook is first saved — no test_id present.
+        logger.info("Webhook received but no test_id found (likely a verification ping), skipping")
+        return JSONResponse({"ok": True})
 
     logger.info("Webhook received: test_id=%d", test_id)
-    background_tasks.add_task(_process, test_id, url_ui)
+    background_tasks.add_task(_process, test_id, test_url)
     return JSONResponse({"ok": True, "test_id": test_id})
 
 

@@ -3,7 +3,6 @@ import logging
 import httpx
 
 from dojo import Finding, ScanContext, format_component, service_for_finding
-from utils import redact
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ def _format_text(finding: Finding, analysis: str | None) -> str:
     lines.append(f"*{emoji} [{finding.severity}] {finding.title}*")
     lines.append("")
 
-    desc = redact((finding.description or "").strip())
+    desc = (finding.description or "").strip()
     if desc:
         if len(desc) > _DESC_MAX:
             desc = desc[:_DESC_MAX].rstrip() + "…"

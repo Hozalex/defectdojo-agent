@@ -19,13 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class _HealthFilter(logging.Filter):
-    """Downgrade uvicorn access log records for GET /health to DEBUG."""
+    """Drop uvicorn access log records for GET /health unless LOG_LEVEL=DEBUG."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        if "GET /health " in msg:
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
+        if "GET /health " in record.getMessage():
+            return logging.getLogger().level <= logging.DEBUG
         return True
 
 

@@ -16,6 +16,10 @@ _SEVERITY_EMOJI = {
     "high":     "🟠",
 }
 
+_SCAN_TYPE_EMOJI = {
+    "gitleaks scan": "🔑",
+}
+
 _DESC_MAX = 400  # characters shown in Description field
 
 
@@ -23,7 +27,7 @@ def _color(severity: str) -> str:
     return _SEVERITY_COLOR.get(severity.lower(), "#95A5A6")
 
 
-def _format_text(finding: Finding, analysis: str | None) -> str:
+def _format_text(finding: Finding, analysis: str | None, show_desc: bool, scan_type: str) -> str:
     """Build the attachment body rendered at full text size.
 
     First line is bold *[Severity] title* — this ensures the severity badge
@@ -33,19 +37,20 @@ def _format_text(finding: Finding, analysis: str | None) -> str:
     lines: list[str] = []
 
     # Bold header — visible at body text size
-    emoji = _SEVERITY_EMOJI.get(finding.severity.lower(), "⚪")
+    emoji = _SCAN_TYPE_EMOJI.get(scan_type.lower()) or _SEVERITY_EMOJI.get(finding.severity.lower(), "⚪")
     lines.append(f"*{emoji} [{finding.severity}] {finding.title}*")
     lines.append("")
 
-    desc = (finding.description or "").strip()
-    if desc:
-        if len(desc) > _DESC_MAX:
-            desc = desc[:_DESC_MAX].rstrip() + "…"
-        lines.append(f"Description: {desc}")
-    else:
-        lines.append("Description: —")
-
-    lines.append("")
+    if show_desc:
+        desc = (finding.description or "").strip()
+        if desc:
+            if len(desc) > _DESC_MAX:
+                desc = desc[:_DESC_MAX].rstrip() + "…"
+            lines.append(f"Description: {desc}")
+            lines.append("")
+    elif finding.file_path:
+        lines.append(f"Found in: `{finding.file_path}`")
+        lines.append("")
 
     if analysis:
         lines.append(f"Analysis:\n{analysis.strip()}")
@@ -61,6 +66,7 @@ def _build_slack_payload(
     analyses: list[str | None],
     total_count: int,
     dojo_base_url: str,
+    show_desc: bool,
 ) -> dict:
     header = f"{ctx.product_name} | {ctx.engagement_name} | {ctx.scan_type} | {total_count} findings"
     if total_count > len(findings):
@@ -80,7 +86,7 @@ def _build_slack_payload(
             "color":      _color(finding.severity),
             "title":      "→ DefectDojo",
             "title_link": f"{dojo_base_url}/finding/{finding.id}",
-            "text":       _format_text(finding, analysis),
+            "text":       _format_text(finding, analysis, show_desc, ctx.scan_type),
             "mrkdwn_in":  ["text"],
             "fields":     fields,
         })
@@ -93,6 +99,7 @@ def _build_text_payload(
     findings: list[Finding],
     analyses: list[str | None],
     total_count: int,
+    show_desc: bool,
 ) -> dict:
     lines = [
         f"Security findings: {ctx.product_name} / {ctx.engagement_name}",
@@ -100,7 +107,7 @@ def _build_text_payload(
         "",
     ]
     for finding, analysis in zip(findings, analyses):
-        lines.append(_format_text(finding, analysis))
+        lines.append(_format_text(finding, analysis, show_desc, ctx.scan_type))
         lines.append("")
     return {"text": "\n".join(lines)}
 
@@ -118,11 +125,12 @@ class Notifier:
         findings: list[Finding],
         analyses: list[str | None],
         total_count: int,
+        show_desc: bool = True,
     ) -> None:
         if self._fmt == "slack":
-            payload = _build_slack_payload(ctx, findings, analyses, total_count, self._dojo_base_url)
+            payload = _build_slack_payload(ctx, findings, analyses, total_count, self._dojo_base_url, show_desc)
         else:
-            payload = _build_text_payload(ctx, findings, analyses, total_count)
+            payload = _build_text_payload(ctx, findings, analyses, total_count, show_desc)
 
         resp = await self._client.post(self._url, json=payload)
         resp.raise_for_status()
